@@ -1,4 +1,4 @@
-use std::fs::read_to_string;
+use std::{fs::read_to_string, sync::Arc};
 
 fn main() {
     let reader = read_to_string("./inputs/day5.txt").unwrap();
@@ -117,9 +117,10 @@ fn part_2(reader: &str) {
     let seed_ranges = seeds.chunks(2).collect::<Vec<_>>();
 
     let mut join_handles: Vec<std::thread::JoinHandle<_>> = Vec::new();
+    let cat_ranges2 = std::sync::Arc::new(cat_ranges);
     for seed_range in seed_ranges {
-        let seed = seed_range.to_owned().to_owned();
-        let cat_ranges2 = cat_ranges.to_owned();
+        let seed = seed_range.to_owned();
+        let cat_ranges2 = cat_ranges2.clone();
         join_handles.push(std::thread::spawn(move || {
             println!("Starting seed: {:?}", seed);
             let res = (seed[0]..=(seed[1] + seed[0]))
