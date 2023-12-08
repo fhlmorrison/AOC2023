@@ -59,7 +59,7 @@ fn part_1(reader: &str) {
         i = (i + 1) % len;
     }
 
-    println!("Part 2: {}", sum);
+    println!("Part 1: {}", sum);
 }
 
 fn part_2(reader: &str) {
