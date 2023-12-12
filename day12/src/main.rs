@@ -1,38 +1,91 @@
-use std::time::{Duration, Instant};
-use std::{collections::VecDeque, fs::read_to_string};
+use once_cell::sync::Lazy;
+use rayon::prelude::*;
+use std::collections::HashMap;
+use std::fs::read_to_string;
+use std::sync::Mutex;
+use std::time::Instant;
+
+static MEMO: Lazy<Mutex<HashMap<(Vec<char>, Vec<usize>), usize>>> = Lazy::new(Default::default);
+
 fn main() {
     // let reader = read_to_string("./inputs/test12A.txt").unwrap();
     let reader = read_to_string("./inputs/day12.txt").unwrap();
 
-    let start = Instant::now();
     part_1(&reader);
-    println!("Part 1 took: {:?}", Instant::now() - start);
-    let start = Instant::now();
     part_2(&reader);
-    println!("Part 1 took: {:?}", Instant::now() - start);
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum Spring {
-    Operational,
-    Damaged,
-    Unknown,
 }
 
 #[derive(Debug)]
 struct Record {
-    springs: Vec<Spring>,
+    springs: Vec<char>,
     groups: Vec<usize>,
+}
+
+fn memo_get(input: &(Vec<char>, Vec<usize>)) -> Option<usize> {
+    let memo = MEMO.lock().unwrap();
+    memo.get(input).map(|v| *v)
+}
+
+fn memo_set(key: (Vec<char>, Vec<usize>), value: usize) {
+    let mut memo = MEMO.lock().unwrap();
+    memo.insert(key, value);
+}
+
+fn recurse<'a, 'b>(springs: &'b [char], nums: &'b [usize]) -> usize {
+    if springs.is_empty() {
+        // End of springs
+        if nums.is_empty() {
+            return 1;
+        }
+        // println!("End of springs, but not nums: {:?}", nums);
+        return 0;
+    }
+
+    if nums.is_empty() {
+        if springs.contains(&'#') {
+            // println!("End of nums, but not springs: {:?}", springs);
+            return 0;
+        }
+        return 1;
+    }
+
+    // Memoization
+    if let Some(val) = memo_get(&(springs.to_owned(), nums.to_owned())) {
+        // println!("Memoized get {}", val);
+        return val;
+    }
+
+    let mut res = 0;
+
+    if ['.', '?'].contains(&springs[0]) {
+        // println!("Op or Unknown");
+        res += recurse(&springs[1..], nums);
+    }
+
+    if ['#', '?'].contains(&springs[0]) {
+        if nums[0] <= springs.len() // Enough springs are left
+            && !springs[..nums[0]].contains(&'.') // Only damaged springs in front
+            && (nums[0] == springs.len() || springs[nums[0]] != '#')
+        {
+            let next: &[char];
+            if nums[0] == springs.len() {
+                next = &[];
+            } else {
+                next = &springs[nums[0] + 1..]
+            }
+            res += recurse(next, &nums[1..]);
+        }
+    }
+
+    memo_set((springs.to_owned(), nums.to_owned()), res);
+    res
 }
 
 impl From<&str> for Record {
     fn from(s: &str) -> Self {
         let split = s.split_whitespace().collect::<Vec<&str>>();
 
-        let springs = split[0]
-            .chars()
-            .map(|c| Spring::from(c))
-            .collect::<Vec<Spring>>();
+        let springs = split[0].chars().collect::<Vec<_>>();
 
         let groups = split[1]
             .split(',')
@@ -44,139 +97,42 @@ impl From<&str> for Record {
 }
 
 impl Record {
-    fn validate_group_prefix(&self, prefix: &Vec<usize>) -> bool {
-        if prefix.len() > self.groups.len() {
-            return false;
-        }
-        for i in 0..prefix.len() {
-            if prefix[i] > self.groups[i] {
-                return false;
-            }
-        }
-
-        true
-    }
-
     fn get_variant_count(&self) -> usize {
-        let mut queue = VecDeque::<Vec<Spring>>::new();
-        queue.push_back(self.springs.clone());
-
-        let mut sum = 0;
-
-        while let Some(mut curr) = queue.pop_back() {
-            if let Some((i, _)) = curr
-                .iter()
-                .enumerate()
-                .find(|(_, s)| *s == &Spring::Unknown)
-            {
-                curr[i] = Spring::Operational;
-                let groups = get_groups(&curr);
-                if self.validate_group_prefix(&groups) {
-                    queue.push_back(curr.clone());
-                }
-                curr[i] = Spring::Damaged;
-                let groups = get_groups(&curr);
-                if self.validate_group_prefix(&groups) {
-                    queue.push_back(curr.clone());
-                }
-            } else {
-                let groups = get_groups(&curr);
-                if groups == self.groups {
-                    sum += 1;
-                }
-            }
-        }
-
-        sum
-    }
-}
-
-fn get_groups(springs: &Vec<Spring>) -> Vec<usize> {
-    let mut groups = vec![];
-    let mut group = 0;
-    for spring in springs {
-        match spring {
-            Spring::Operational => {
-                if group > 0 {
-                    groups.push(group);
-                    group = 0;
-                }
-            }
-            Spring::Damaged => {
-                group += 1;
-            }
-            Spring::Unknown => {
-                if group > 0 {
-                    groups.push(group);
-                }
-                return groups; // Return early
-            }
-        }
-    }
-    if group > 0 {
-        groups.push(group);
-    }
-
-    // let igroups = springs
-    //     .split(|c| c == &Spring::Operational)
-    //     .map(|s| s.len())
-    //     .filter(|s| *s > 0)
-    //     .collect::<Vec<_>>();
-
-    groups
-}
-
-impl From<char> for Spring {
-    fn from(c: char) -> Self {
-        match c {
-            '.' => Spring::Operational,
-            '#' => Spring::Damaged,
-            '?' => Spring::Unknown,
-            _ => panic!("Invalid char: {}", c),
-        }
+        recurse(&self.springs, &self.groups)
     }
 }
 
 // Creating expanded grid
 fn part_1(reader: &str) {
-    let lines = reader.lines();
+    let start = Instant::now();
+    let lines = reader.par_lines();
 
     let records = lines.map(|line| Record::from(line)).collect::<Vec<_>>();
-
-    // records.iter().for_each(|r| println!("{:?}", r));
-
-    // records
-    //     .iter()
-    //     .for_each(|r| println!("{:?}", r.get_variant_count()));
 
     let sum = records
         .iter()
         .fold(0, |acc, val| acc + val.get_variant_count());
 
-    println!("Part 1: {}", sum);
+    println!("Part 1: {} in {:?}", sum, start.elapsed());
 }
 
 // Creating expanded grid
 fn part_2(reader: &str) {
-    let lines = reader.lines();
+    let start = Instant::now();
+    let lines = reader.par_lines();
 
-    let records = lines.map(|line| Record::from(line)).collect::<Vec<_>>();
-
-    let records2 = records
-        .iter()
+    let unfolded_records = lines
+        .map(|line| Record::from(line))
         .map(|r| {
-            let mut nr = Vec::new();
-            nr.extend(r.springs.clone());
-            nr.extend(r.springs.clone());
-            nr.extend(r.springs.clone());
-            nr.extend(r.springs.clone());
-            nr.extend(r.springs.clone());
-            let mut ns = Vec::new();
-            ns.extend(r.groups.clone());
-            ns.extend(r.groups.clone());
-            ns.extend(r.groups.clone());
-            ns.extend(r.groups.clone());
-            ns.extend(r.groups.clone());
+            let mut nr = r.springs.clone();
+            for _ in 0..4 {
+                nr.push('?');
+                nr.extend(r.springs.clone());
+            }
+            let mut ns = r.groups.clone();
+            for _ in 0..4 {
+                ns.extend(r.groups.clone());
+            }
             Record {
                 springs: nr,
                 groups: ns,
@@ -184,17 +140,9 @@ fn part_2(reader: &str) {
         })
         .collect::<Vec<_>>();
 
-    // records.iter().for_each(|r| println!("{:?}", r));
+    let sum = unfolded_records
+        .iter()
+        .fold(0, |acc, val| acc + val.get_variant_count());
 
-    // records
-    //     .iter()
-    //     .for_each(|r| println!("{:?}", r.get_variant_count()));
-    println!("Starting");
-
-    let sum = records2.iter().fold(0, |acc, val| {
-        println!("Acc: {acc}");
-        acc + val.get_variant_count()
-    });
-
-    println!("Part 2: {}", sum);
+    println!("Part 2: {} in {:?}", sum, start.elapsed());
 }
